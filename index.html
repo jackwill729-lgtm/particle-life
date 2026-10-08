@@ -107,6 +107,7 @@ const cv = document.getElementById('c');
 const ctx = cv.getContext('2d', { alpha: false });
 let vw = 0, vh = 0, dpr = 1, W = 1, H = 1;   // view size (css px), world size
 const cam = { x: 0, y: 0, z: 1 };
+const ZMIN = 0.25, ZMAX = 8;
 
 // ---------- particles ----------
 let cap = 0, n = 0;
@@ -327,9 +328,20 @@ function resize() {
 function render() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalCompositeOperation = 'source-over';
+  const z = cam.z, opaqueTiles = z < 1 && !S.trails && !S.glow;
   if (S.trails) { ctx.globalAlpha = 0.22; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height); ctx.globalAlpha = 1; }
-  else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height); }
-  const z = cam.z, sc = z * dpr, cx = cam.x, cy = cam.y, Wd = W, Hd = H;
+  else if (!opaqueTiles) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height); }
+  if (z < 1) renderTiled(z); else renderDirect(z);
+  if (stir.size) {   // faint ring under each stirring finger
+    ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.lineWidth = 1.5 * dpr;
+    for (const f of fingers.values()) if (f.mode === 'stir') {
+      ctx.beginPath(); ctx.arc(f.sx * dpr, f.sy * dpr, rMaxPx() * 1.3 * z * dpr, 0, 6.2832); ctx.stroke();
+    }
+  }
+}
+// zoom >= 1: at most one copy of the world is visible, draw each particle once
+function renderDirect(z) {
+  const sc = z * dpr, cx = cam.x, cy = cam.y, Wd = W, Hd = H;
   const visW = Wd / z, visH = Hd / z;
   const s = S.size * Math.pow(z, 0.6) * dpr, hs = s / 2;
   const t = S.types;
@@ -357,12 +369,63 @@ function render() {
       ctx.fill();
     }
   }
-  if (stir.size) {   // faint ring under each stirring finger
-    ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.lineWidth = 1.5 * dpr;
-    for (const f of fingers.values()) if (f.mode === 'stir') {
-      ctx.beginPath(); ctx.arc(f.sx * dpr, f.sy * dpr, rMaxPx() * 1.3 * z * dpr, 0, 6.2832); ctx.stroke();
+}
+// zoom < 1: the toroidal world repeats. Draw the world once into an offscreen tile (integer pixel
+// size so copies butt together seamlessly), then stamp that tile across the screen with drawImage.
+// Particles overlapping a tile edge are also drawn on the opposite edge so nothing is clipped at seams.
+let tileCv = null, tctx = null;
+const tile = { tw: 0, th: 0, ox: 0, oy: 0, nx: 0, ny: 0 };
+function renderTiled(z) {
+  const tw = Math.max(1, Math.round(W * z * dpr)), th = Math.max(1, Math.round(H * z * dpr));
+  if (!tileCv || tileCv.width < tw || tileCv.height < th) {
+    tileCv = tileCv || document.createElement('canvas');
+    tileCv.width = Math.ceil(W * dpr); tileCv.height = Math.ceil(H * dpr);
+    tctx = tileCv.getContext('2d');
+  }
+  const scx = tw / W, scy = th / H, s = S.size * Math.pow(z, 0.6) * dpr, hs = s / 2, t = S.types, N = n;
+  tctx.setTransform(1, 0, 0, 1, 0, 0);
+  tctx.globalCompositeOperation = 'source-over';
+  // opaque black tile when nothing needs to show through: the tiles then repaint every screen pixel,
+  // so the main canvas needn't be cleared (halves full-screen fill work when zoomed out)
+  const opaque = !S.trails && !S.glow;
+  if (opaque) { tctx.fillStyle = '#000'; tctx.fillRect(0, 0, tw, th); } else tctx.clearRect(0, 0, tw, th);
+  tctx.save(); tctx.beginPath(); tctx.rect(0, 0, tw, th); tctx.clip();
+  if (S.glow) {
+    tctx.globalCompositeOperation = 'lighter';
+    tctx.globalAlpha = Math.sqrt(z);   // dense when zoomed out: tone down additive glow so it doesn't blow out
+    const g = s * 5, hg = g / 2;
+    for (let i = 0; i < N; i++) {
+      const X = px[i] * scx, Y = py[i] * scy, sp = sprites[pt[i]];
+      const ex = X < hg ? tw : X > tw - hg ? -tw : 0, ey = Y < hg ? th : Y > th - hg ? -th : 0;
+      tctx.drawImage(sp, X - hg, Y - hg, g, g);
+      if (ex) tctx.drawImage(sp, X + ex - hg, Y - hg, g, g);
+      if (ey) { tctx.drawImage(sp, X - hg, Y + ey - hg, g, g); if (ex) tctx.drawImage(sp, X + ex - hg, Y + ey - hg, g, g); }
+    }
+  } else {
+    for (let k = 0; k < t; k++) {
+      tctx.fillStyle = colors[k];
+      tctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        if (pt[i] !== k) continue;
+        const X = px[i] * scx - hs, Y = py[i] * scy - hs;
+        tctx.rect(X, Y, s, s);
+        const ex = X < 0 ? tw : X + s > tw ? -tw : 0, ey = Y < 0 ? th : Y + s > th ? -th : 0;
+        if (ex) tctx.rect(X + ex, Y, s, s);
+        if (ey) { tctx.rect(X, Y + ey, s, s); if (ex) tctx.rect(X + ex, Y + ey, s, s); }
+      }
+      tctx.fill();
     }
   }
+  tctx.restore();
+  // screen position (device px) of world origin, wrapped into (-tile, 0]
+  let ox = -Math.round(cam.x * scx) % tw, oy = -Math.round(cam.y * scy) % th;
+  if (ox > 0) ox -= tw; if (oy > 0) oy -= th;
+  ctx.globalCompositeOperation = S.glow ? 'lighter' : 'source-over';
+  let nx = 0, ny = 0;
+  for (let y = oy; y < cv.height; y += th, ny++) for (let x = ox; x < cv.width; x += tw) ctx.drawImage(tileCv, 0, 0, tw, th, x, y, tw, th);
+  for (let x = ox; x < cv.width; x += tw) nx++;
+  ctx.globalCompositeOperation = 'source-over';
+  tile.tw = tw; tile.th = th; tile.ox = ox; tile.oy = oy; tile.nx = nx; tile.ny = ny;
 }
 
 // ---------- loop / perf ----------
@@ -391,7 +454,7 @@ function loop(now) {
   if (now - fpsT >= 500) {
     fps = frames * 1000 / (now - fpsT); frames = 0; fpsT = now;
     fpsLog.push(fps); if (fpsLog.length > 120) fpsLog.shift();
-    if (S.showStats) statsEl.textContent = `${fps.toFixed(0)} fps  ${n} pts  ${stepMs.toFixed(1)} ms${S.paused ? '  paused' : ''}${presetName ? '\n' + presetName : ''}`;
+    if (S.showStats) statsEl.textContent = `${fps.toFixed(0)} fps  ${n} pts  ${stepMs.toFixed(1)} ms${Math.abs(cam.z - 1) > 0.01 ? '  ' + cam.z.toFixed(2) + '×' : ''}${S.paused ? '  paused' : ''}${presetName ? '\n' + presetName : ''}`;
     autoPerf(now);
   }
 }
@@ -421,6 +484,13 @@ function newRules() { randomMatrix(); syncUI(); saveHash(); toast('New rules'); 
 const fingers = new Map();   // id -> {sx,sy,x0,y0,t0,mode,lx,ly,lt}
 let gesture = null;          // {type:'pinch'|'two', ...}
 let longT = 0, maxTouches = 0, twoStart = 0, twoMoved = false;
+function resetView() { cam.x = cam.y = 0; cam.z = 1; }
+// zoom to z keeping the world point under screen point (sx, sy) fixed
+function zoomAt(sx, sy, z) {
+  z = Math.max(ZMIN, Math.min(ZMAX, z));
+  const wx = cam.x + sx / cam.z, wy = cam.y + sy / cam.z;
+  cam.z = z; cam.x = (((wx - sx / z) % W) + W) % W; cam.y = (((wy - sy / z) % H) + H) % H;
+}
 function toWorld(sx, sy) { let x = cam.x + sx / cam.z, y = cam.y + sy / cam.z; x = ((x % W) + W) % W; y = ((y % H) + H) % H; return [x, y]; }
 function onDown(id, x, y) {
   fingers.set(id, { sx: x, sy: y, x0: x, y0: y, t0: performance.now(), mode: 'pending', lt: performance.now() });
@@ -446,7 +516,9 @@ function onMove(id, x, y) {
     const dt = Math.max(8, now - f.lt) / 1000;
     const [wx, wy] = toWorld(x, y);
     const s = stir.get(id) || { x: wx, y: wy, vx: 0, vy: 0 };
-    const vx = (x - f.sx) / cam.z / dt, vy = (y - f.sy) / cam.z / dt;
+    let vx = (x - f.sx) / cam.z / dt, vy = (y - f.sy) / cam.z / dt;
+    const vm = Math.hypot(vx, vy), vcap = rMaxPx() * 25;
+    if (vm > vcap) { vx *= vcap / vm; vy *= vcap / vm; }
     s.vx = s.vx * 0.5 + vx * 0.5; s.vy = s.vy * 0.5 + vy * 0.5; s.x = wx; s.y = wy; s.t = now;
     stir.set(id, s);
   }
@@ -456,7 +528,7 @@ function onMove(id, x, y) {
     const d = Math.hypot(a.sx - b.sx, a.sy - b.sy) || 1, mx = (a.sx + b.sx) / 2, my = (a.sy + b.sy) / 2;
     if (Math.abs(d - gesture.d0) > 12 || Math.hypot(mx - gesture.mx, my - gesture.my) > 12) twoMoved = true;
     if (twoMoved) {
-      const z = Math.max(1, Math.min(8, gesture.z0 * d / gesture.d0));
+      const z = Math.max(ZMIN, Math.min(ZMAX, gesture.z0 * d / gesture.d0));
       // world point under the initial midpoint stays under the current midpoint
       const wx = gesture.cx0 + gesture.mx / gesture.z0, wy = gesture.cy0 + gesture.my / gesture.z0;
       cam.z = z; cam.x = (((wx - mx / z) % W) + W) % W; cam.y = (((wy - my / z) % H) + H) % H;
@@ -491,14 +563,14 @@ window.addEventListener('mouseup', e => { if (mouseDown) { mouseDown = false; on
 cv.addEventListener('contextmenu', e => { e.preventDefault(); setPanel(!panelOpen()); });
 cv.addEventListener('wheel', e => {
   e.preventDefault();
-  const z = Math.max(1, Math.min(8, cam.z * Math.exp(-e.deltaY * 0.0015)));
-  const wx = cam.x + e.clientX / cam.z, wy = cam.y + e.clientY / cam.z;
-  cam.z = z; cam.x = (((wx - e.clientX / z) % W) + W) % W; cam.y = (((wy - e.clientY / z) % H) + H) % H;
+  zoomAt(e.clientX, e.clientY, cam.z * Math.exp(-(e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY) * 0.0015));
 }, { passive: false });
 window.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   if (e.key === ' ') { S.paused = !S.paused; syncUI(); }
   else if (e.key === 'r') newRules();
+  else if (e.key === '0') resetView();
+  else if (e.key === '-' || e.key === '=' || e.key === '+') zoomAt(innerWidth / 2, innerHeight / 2, cam.z * (e.key === '-' ? 0.8 : 1.25));
   else if (e.key === 's' || e.key === 'Escape') setPanel(e.key === 's' ? !panelOpen() : false);
 });
 document.addEventListener('gesturestart', e => e.preventDefault());
@@ -513,7 +585,7 @@ $('bReset').addEventListener('click', () => { resetPositions(); toast('Positions
 $('bMutate').addEventListener('click', () => { const t = S.types; for (let i = 0; i < t; i++) for (let j = 0; j < t; j++) M[i * MAXT + j] = Math.max(-1, Math.min(1, M[i * MAXT + j] + (Math.random() - 0.5) * 0.4)); presetName = ''; syncUI(); saveHash(); });
 $('bSym').addEventListener('click', () => { const t = S.types; for (let i = 0; i < t; i++) for (let j = i + 1; j < t; j++) { const v = (M[i * MAXT + j] + M[j * MAXT + i]) / 2; M[i * MAXT + j] = M[j * MAXT + i] = v; } presetName = ''; syncUI(); saveHash(); });
 $('bZero').addEventListener('click', () => { M.fill(0); presetName = ''; syncUI(); saveHash(); });
-$('bView').addEventListener('click', () => { cam.x = cam.y = 0; cam.z = 1; });
+$('bView').addEventListener('click', () => { resetView(); toast('Zoom reset'); });
 $('bShare').addEventListener('click', async () => {
   clearTimeout(hashTimer); saveHash(); await new Promise(r => setTimeout(r, 300));
   const url = location.href;
@@ -594,7 +666,7 @@ buildColors();
 alloc(Math.max(S.count, 256)); n = 0; setCount(S.count); resetPositions();
 if (!fromHash) applyPreset(Math.random() * 3 | 0, true);   // Cells / Bugs / Critters
 resize(); syncUI(); saveHash();
-if (!fromHash) toast('Tap: new rules · Drag: stir · Pinch: zoom · Hold or ⚙: settings', 4500);
+if (!fromHash) toast('Tap: new rules · Drag: stir · Pinch: zoom in/out · Hold or ⚙: settings', 4500);
 else toast(presetName ? `Shared rules: ${presetName}` : 'Shared rules loaded', 2000);
 requestAnimationFrame(t => { last = t; fpsT = t; requestAnimationFrame(loop); });
 
@@ -603,7 +675,7 @@ window.__pl = {
   S, M, cam, get n() { return n; }, get fps() { return fps; }, get stepMs() { return stepMs; }, get renderMs() { return renderMs; }, fpsLog,
   get panelOpen() { return panelOpen(); }, get rMax() { return rMaxPx(); }, presets: PRESETS.map(p => p.name),
   setCount: c => { setCount(c); syncUI(); }, applyPreset: k => applyPreset(k, true), resetPositions,
-  pos: i => [px[i], py[i], pvx[i], pvy[i], pt[i]],
+  pos: i => [px[i], py[i], pvx[i], pvy[i], pt[i]], toWorld, tile, ZMIN, ZMAX, zoomAt,
   meanSpeed() { let s = 0; for (let i = 0; i < n; i++) s += Math.hypot(pvx[i], pvy[i]); return s / n; },
 };
 })();
