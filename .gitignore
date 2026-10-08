@@ -1,0 +1,4 @@
+shots/
+*.py
+perf.json
+__pycache__/

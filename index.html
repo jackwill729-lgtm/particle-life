@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Particle Life</title>
+<link rel="icon" href="data:,">
+<style>
+  :root{--safe-t:env(safe-area-inset-top,0px);--safe-r:env(safe-area-inset-right,0px);--safe-b:env(safe-area-inset-bottom,0px);--safe-l:env(safe-area-inset-left,0px)}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow:hidden;background:#000;color:#eee;
+    font:14px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    touch-action:none;overscroll-behavior:none;user-select:none;-webkit-user-select:none}
+  canvas#c{position:fixed;inset:0;width:100vw;height:100vh;height:100dvh;display:block;touch-action:none}
+  #stats{position:fixed;top:calc(8px + var(--safe-t));left:calc(10px + var(--safe-l));font:12px/1.2 ui-monospace,Menlo,monospace;
+    color:rgba(255,255,255,.55);pointer-events:none;text-shadow:0 0 3px #000;white-space:pre}
+  #gear{position:fixed;top:calc(6px + var(--safe-t));right:calc(6px + var(--safe-r));width:44px;height:44px;border:0;border-radius:22px;
+    background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);font-size:22px;line-height:44px;padding:0;touch-action:manipulation}
+  #toast{position:fixed;left:50%;top:calc(58px + var(--safe-t));transform:translateX(-50%);width:max-content;max-width:88vw;padding:8px 14px;border-radius:18px;
+    background:rgba(20,20,28,.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);color:#fff;font-size:13px;text-align:center;
+    pointer-events:none;opacity:0;transition:opacity .25s}
+  #toast.on{opacity:1}
+  #panel{position:fixed;left:0;right:0;bottom:0;max-height:62vh;max-height:62dvh;overflow-y:auto;overscroll-behavior:contain;
+    padding:10px 14px calc(14px + var(--safe-b));background:rgba(14,14,22,.66);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    border-top:1px solid rgba(255,255,255,.12);border-radius:16px 16px 0 0;transform:translateY(105%);transition:transform .22s ease-out;touch-action:pan-y}
+  #panel.open{transform:none}
+  #panel h3{margin:10px 0 6px;font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.5)}
+  .row{display:flex;gap:6px;flex-wrap:wrap}
+  .btn{flex:1 1 auto;min-width:0;white-space:nowrap;min-height:38px;border:1px solid rgba(255,255,255,.16);border-radius:10px;background:rgba(255,255,255,.08);
+    color:#fff;font:inherit;font-size:13px;padding:6px 7px;touch-action:manipulation}
+  .btn:active{background:rgba(255,255,255,.22)}
+  .btn.on{background:rgba(120,180,255,.3);border-color:rgba(140,190,255,.6)}
+  #presets{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .sl{display:grid;grid-template-columns:96px 1fr 52px;align-items:center;gap:8px;margin:4px 0}
+  .sl label{color:rgba(255,255,255,.8);font-size:13px}
+  .sl output{text-align:right;font:12px ui-monospace,Menlo,monospace;color:rgba(255,255,255,.7)}
+  input[type=range]{width:100%;height:30px;margin:0;accent-color:#7ab4ff;touch-action:pan-x}
+  #mwrap{display:flex;gap:12px;align-items:flex-start}
+  #matrix{touch-action:manipulation;border-radius:6px;flex:0 0 auto}
+  #mhelp{font-size:12px;color:rgba(255,255,255,.6);flex:1}
+  #mhelp b{color:#fff;font-weight:600}
+  .grab{width:40px;height:4px;border-radius:2px;background:rgba(255,255,255,.3);margin:0 auto 6px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="stats"></div>
+<button id="gear" aria-label="Settings">&#9881;</button>
+<div id="toast"></div>
+<div id="panel" aria-hidden="true">
+  <div class="grab"></div>
+  <div class="row">
+    <button class="btn" id="bPause">&#9208; Pause</button>
+    <button class="btn" id="bRand">&#127922; New</button>
+    <button class="btn" id="bReset">&#8634; Reset</button>
+    <button class="btn" id="bShare">&#128279; Share</button>
+    <button class="btn" id="bClose" style="flex:0 0 40px;min-width:40px" aria-label="Close">&#10005;</button>
+  </div>
+  <h3>Presets</h3>
+  <div id="presets"></div>
+  <h3>Rules <span style="text-transform:none;letter-spacing:0;font-weight:400">(tap a cell to change it)</span></h3>
+  <div id="mwrap">
+    <canvas id="matrix"></canvas>
+    <div id="mhelp">Each <b>row</b> colour feels the <b>column</b> colour.<br><span style="color:#5f5">green</span> = attracted,
+      <span style="color:#f66">red</span> = repelled.<br>Tap steps +0.5 (wraps &minus;1&rarr;1).
+      <div class="row" style="margin-top:8px;flex-direction:column">
+        <button class="btn" id="bMutate">Mutate</button>
+        <button class="btn" id="bSym">Symmetric</button>
+        <button class="btn" id="bZero">Zero</button>
+      </div>
+    </div>
+  </div>
+  <h3>Settings</h3>
+  <div class="sl"><label for="sCount">Particles</label><input id="sCount" type="range" min="200" max="8000" step="100"><output id="oCount"></output></div>
+  <div class="sl"><label for="sTypes">Colours</label><input id="sTypes" type="range" min="2" max="10" step="1"><output id="oTypes"></output></div>
+  <div class="sl"><label for="sRad">Reach (rMax)</label><input id="sRad" type="range" min="0.04" max="0.25" step="0.005"><output id="oRad"></output></div>
+  <div class="sl"><label for="sFric">Friction</label><input id="sFric" type="range" min="0" max="1" step="0.01"><output id="oFric"></output></div>
+  <div class="sl"><label for="sForce">Force</label><input id="sForce" type="range" min="1" max="30" step="0.5"><output id="oForce"></output></div>
+  <div class="sl"><label for="sBeta">Personal space</label><input id="sBeta" type="range" min="0.1" max="0.6" step="0.01"><output id="oBeta"></output></div>
+  <div class="sl"><label for="sSize">Dot size</label><input id="sSize" type="range" min="1" max="6" step="0.5"><output id="oSize"></output></div>
+  <div class="sl"><label for="sSpeed">Sim speed</label><input id="sSpeed" type="range" min="0.25" max="2" step="0.25"><output id="oSpeed"></output></div>
+  <div class="row" style="margin-top:8px">
+    <button class="btn" id="tTrails">Trails</button>
+    <button class="btn" id="tGlow">Glow</button>
+    <button class="btn" id="tAuto">Auto-perf</button>
+    <button class="btn" id="tStats">FPS</button>
+    <button class="btn" id="bView">Reset zoom</button>
+  </div>
+</div>
+<script>
+(() => {
+'use strict';
+// ---------- state ----------
+const MAXT = 10, DT = 1 / 60;
+const S = {
+  types: 6, count: 2000, rMaxRel: 0.1, halfLife: 0.04, force: 10, beta: 0.3,
+  size: 2.5, speed: 1, trails: false, glow: false, autoPerf: true, showStats: true, paused: false,
+};
+let M = new Float32Array(MAXT * MAXT);   // attraction matrix, row i feels column j
+let presetName = '';
+
+// ---------- canvas ----------
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d', { alpha: false });
+let vw = 0, vh = 0, dpr = 1, W = 1, H = 1;   // view size (css px), world size
+const cam = { x: 0, y: 0, z: 1 };
+
+// ---------- particles ----------
+let cap = 0, n = 0;
+// particle storage is re-sorted by grid cell every step (better cache locality); b* are the back buffers
+let px, py, pvx, pvy, pt, bx, by, bvx, bvy, bt, cellOf, fxs, fys;
+function alloc(c) {
+  const grow = (old, T) => { const a = new T(c); if (old) a.set(old.subarray(0, Math.min(old.length, c))); return a; };
+  px = grow(px, Float32Array); py = grow(py, Float32Array); pvx = grow(pvx, Float32Array); pvy = grow(pvy, Float32Array);
+  pt = grow(pt, Uint8Array);
+  bx = new Float32Array(c); by = new Float32Array(c); bvx = new Float32Array(c); bvy = new Float32Array(c); bt = new Uint8Array(c);
+  cellOf = new Int32Array(c); fxs = new Float32Array(c); fys = new Float32Array(c);
+  cap = c;
+}
+function setCount(c) {
+  c = Math.max(50, Math.min(20000, c | 0));
+  if (c > cap) alloc(Math.max(c, cap * 1.5 | 0));
+  for (let i = n; i < c; i++) { px[i] = Math.random() * W; py[i] = Math.random() * H; pvx[i] = pvy[i] = 0; pt[i] = i % S.types; }
+  n = c; S.count = c;
+}
+function resetPositions() {
+  for (let i = 0; i < n; i++) { px[i] = Math.random() * W; py[i] = Math.random() * H; pvx[i] = pvy[i] = 0; pt[i] = i % S.types; }
+}
+function setTypes(t) {
+  t = Math.max(2, Math.min(MAXT, t | 0));
+  if (t > S.types) for (let i = 0; i < MAXT; i++) for (let j = 0; j < MAXT; j++) if (i >= S.types || j >= S.types) M[i * MAXT + j] = rnd();
+  S.types = t;
+  for (let i = 0; i < n; i++) pt[i] = i % t;
+}
+
+// ---------- colours ----------
+let colors = [], sprites = [];
+function buildColors() {
+  colors = []; sprites = [];
+  for (let i = 0; i < MAXT; i++) {
+    const h = (i * 360 / S.types + 4) % 360;
+    const l = (h > 40 && h < 200) ? 55 : 62;   // keep yellows/greens from looking washed out vs blues
+    colors.push(`hsl(${h.toFixed(0)},95%,${l}%)`);
+  }
+  for (let i = 0; i < MAXT; i++) {
+    const s = document.createElement('canvas'), R = 32; s.width = s.height = R * 2;
+    const g = s.getContext('2d'), gr = g.createRadialGradient(R, R, 0, R, R, R);
+    gr.addColorStop(0, '#fff'); gr.addColorStop(0.12, colors[i]); gr.addColorStop(0.35, colors[i].replace('hsl', 'hsla').replace(')', ',0.35)'));
+    gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, R * 2, R * 2); sprites.push(s);
+  }
+}
+
+// ---------- rules ----------
+const rnd = () => Math.random() * 2 - 1;
+function randomMatrix() { for (let i = 0; i < MAXT * MAXT; i++) M[i] = rnd(); presetName = ''; }
+const T = () => S.types;
+const PRESETS = [
+  { name: 'Cells', p: { types: 3, rMaxRel: 0.12, halfLife: 0.05, force: 6, beta: 0.3, count: 1600 },
+    M: [[1, 0.2, 0.3], [0.6, -0.3, 0], [-0.2, 0.5, 0.4]] },
+  { name: 'Bugs', p: { types: 5, rMaxRel: 0.1, halfLife: 0.04, force: 7, beta: 0.3, count: 1600 },
+    M: [[0.12, 0.36, -0.79, 0.14, -0.62], [-0.81, 0.42, 0.13, 0.24, -0.01], [0.06, 0.55, -0.07, 0.85, -0.28],
+        [-0.5, -0.64, 0.56, -0.84, -0.4], [-0.01, -0.31, -0.1, 0.22, -0.85]] },
+  { name: 'Critters', p: { types: 4, rMaxRel: 0.1, halfLife: 0.04, force: 7, beta: 0.3, count: 1600 },
+    M: [[-0.1, 0.1, 0.77, 0.64], [0.73, -0.44, -0.17, -0.28], [0.77, 0.92, -0.7, -0.65], [-0.54, -0.53, -0.03, 0.18]] },
+  { name: 'Snakes', p: { types: 6, rMaxRel: 0.1, halfLife: 0.04, force: 5, beta: 0.3, count: 1500 },
+    m: (i, j, t) => j === i ? 1 : j === (i + 1) % t ? 0.2 : 0 },
+  { name: 'Flowers', p: { types: 6, rMaxRel: 0.1, halfLife: 0.04, force: 6, beta: 0.3, count: 1500 },
+    m: (i, j, t) => j === i ? 1 : j === (i + 1) % t ? 0.3 : 0 },
+  { name: 'Chains', p: { types: 6, rMaxRel: 0.1, halfLife: 0.04, force: 10, beta: 0.3, count: 2000 },
+    m: (i, j, t) => j === i ? 1 : (j === (i + 1) % t || j === (i + t - 1) % t) ? 0.2 : -1 },
+  { name: 'Eyes', p: { types: 2, rMaxRel: 0.12, halfLife: 0.05, force: 6, beta: 0.3, count: 1600 },
+    M: [[1, 0.3], [0.7, -0.2]] },
+];
+function applyPreset(k, silent) {
+  const P = PRESETS[k]; Object.assign(S, P.p);
+  M.fill(0);
+  for (let i = 0; i < S.types; i++) for (let j = 0; j < S.types; j++)
+    M[i * MAXT + j] = P.M ? P.M[i][j] : P.m(i, j, S.types);
+  presetName = P.name; buildColors();
+  if (n !== S.count) setCount(S.count);
+  resetPositions(); syncUI(); saveHash();
+  if (!silent) toast(P.name);
+}
+
+// ---------- URL hash (shareable rules) ----------
+function b64e(bytes) { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+function b64d(str) { const s = atob(str.replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(s, c => c.charCodeAt(0)); }
+let hashTimer = 0;
+function saveHash() {
+  clearTimeout(hashTimer);
+  hashTimer = setTimeout(() => {
+    const t = S.types, b = new Uint8Array(t * t);
+    for (let i = 0; i < t; i++) for (let j = 0; j < t; j++) b[i * t + j] = Math.round(M[i * MAXT + j] * 100) + 100;
+    const q = new URLSearchParams({ t, m: b64e(b), n: S.count, r: S.rMaxRel, f: S.halfLife, k: S.force, b: S.beta });
+    if (presetName) q.set('p', presetName);
+    try { history.replaceState(null, '', location.pathname + location.search + '#' + q.toString()); } catch (e) {}
+  }, 250);
+}
+function loadHash() {
+  if (location.hash.length < 3) return false;
+  try {
+    const q = new URLSearchParams(location.hash.slice(1));
+    const num = (k, lo, hi, d) => { const v = parseFloat(q.get(k)); return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; };
+    const t = num('t', 2, MAXT, S.types) | 0, b = q.get('m') ? b64d(q.get('m')) : null;
+    if (!b || b.length !== t * t) return false;
+    S.types = t; M.fill(0);
+    for (let i = 0; i < t; i++) for (let j = 0; j < t; j++) M[i * MAXT + j] = Math.max(-1, Math.min(1, (b[i * t + j] - 100) / 100));
+    S.count = num('n', 50, 20000, S.count) | 0; S.rMaxRel = num('r', 0.02, 0.3, S.rMaxRel);
+    S.halfLife = num('f', 0.005, 2, S.halfLife); S.force = num('k', 0.1, 60, S.force); S.beta = num('b', 0.05, 0.9, S.beta);
+    presetName = q.get('p') || '';
+    if (q.get('auto') === '0') S.autoPerf = false;
+    return true;
+  } catch (e) { return false; }
+}
+
+// ---------- physics ----------
+let gw = 0, gh = 0, cellStart = new Int32Array(1), cellFill = new Int32Array(1);
+const stir = new Map();   // touch id -> {x,y,vx,vy} in world units
+function rMaxPx() { return Math.min(S.rMaxRel * Math.sqrt(W * H), Math.min(W, H) / 3.05); }
+// Accumulate forces for every pair (i in cell range [as,ae), j in [bs,be)) once, applying the
+// result to both particles (half the distance maths of a naive neighbour scan).
+// (shx, shy) shifts cell B across the toroidal seam.
+let P_rM = 1, P_rM2 = 1, P_irM = 1, P_b = 0.3, P_ib = 1, P_i1b = 1;
+function pairCells(as, ae, bs, be, shx, shy, same) {
+  const X = px, Y = py, TT = pt, FX = fxs, FY = fys, MM = M, rM2 = P_rM2, irM = P_irM, b = P_b, ib = P_ib, i1b = P_i1b, b1 = 1 + b;
+  for (let i = as; i < ae; i++) {
+    const xi = X[i] - shx, yi = Y[i] - shy, tr = TT[i], ti = tr * MAXT;
+    let fxi = 0, fyi = 0;
+    for (let j = same ? i + 1 : bs; j < be; j++) {
+      const dx = X[j] - xi, dy = Y[j] - yi, r2 = dx * dx + dy * dy;
+      if (r2 >= rM2 || r2 === 0) continue;
+      const r = Math.sqrt(r2), rn = r * irM, ir = 1 / r;
+      let fi, fj;
+      if (rn < b) { fi = fj = (rn * ib - 1) * ir; }
+      else {
+        const g = (1 - Math.abs(2 * rn - b1) * i1b) * ir, tj = TT[j];
+        fi = MM[ti + tj] * g; fj = MM[tj * MAXT + tr] * g;
+      }
+      fxi += dx * fi; fyi += dy * fi;
+      FX[j] -= dx * fj; FY[j] -= dy * fj;
+    }
+    FX[i] += fxi; FY[i] += fyi;
+  }
+}
+const halfShell = K => { const o = []; for (let dy = 0; dy <= K; dy++) for (let dx = -K; dx <= K; dx++) if (dy > 0 || dx > 0) o.push(dx, dy); return o; };
+const OFF1 = halfShell(1), OFF2 = halfShell(2);
+function step(dt) {
+  const N = n, Wd = W, Hd = H, rM = rMaxPx();
+  P_rM = rM; P_rM2 = rM * rM; P_irM = 1 / rM; P_b = S.beta; P_ib = 1 / S.beta; P_i1b = 1 / (1 - S.beta);
+  // cells are rMax/2 wide (5x5 neighbourhood checks ~30% less area than rMax cells with 3x3)
+  const K = (Wd / rM >= 5 && Hd / rM >= 5) ? 2 : 1, OFF = K === 2 ? OFF2 : OFF1;
+  gw = Math.max(2 * K + 1, Math.floor(Wd * K / rM)); gh = Math.max(2 * K + 1, Math.floor(Hd * K / rM));
+  const cw = Wd / gw, ch = Hd / gh, nc = gw * gh;
+  if (cellStart.length < nc + 1) { cellStart = new Int32Array(nc + 1); cellFill = new Int32Array(nc + 1); }
+  cellStart.fill(0, 0, nc + 1);
+  for (let i = 0; i < N; i++) {
+    let cx = (px[i] / cw) | 0, cy = (py[i] / ch) | 0;
+    if (cx >= gw) cx = gw - 1; else if (cx < 0) cx = 0;
+    if (cy >= gh) cy = gh - 1; else if (cy < 0) cy = 0;
+    const c = cy * gw + cx; cellOf[i] = c; cellStart[c + 1]++;
+  }
+  for (let c = 0; c < nc; c++) cellStart[c + 1] += cellStart[c];
+  cellFill.set(cellStart.subarray(0, nc));
+  for (let i = 0; i < N; i++) { const k = cellFill[cellOf[i]]++; bx[k] = px[i]; by[k] = py[i]; bvx[k] = pvx[i]; bvy[k] = pvy[i]; bt[k] = pt[i]; }
+  let t;
+  t = px; px = bx; bx = t; t = py; py = by; by = t; t = pvx; pvx = bvx; bvx = t; t = pvy; pvy = bvy; bvy = t; t = pt; pt = bt; bt = t;
+
+  fxs.fill(0, 0, N); fys.fill(0, 0, N);
+  for (let cy = 0; cy < gh; cy++) for (let cx = 0; cx < gw; cx++) {
+    const a = cy * gw + cx, as = cellStart[a], ae = cellStart[a + 1];
+    if (as === ae) continue;
+    pairCells(as, ae, as, ae, 0, 0, true);
+    // forward half of the neighbourhood, so each pair of cells is visited once
+    for (let q = 0; q < OFF.length; q += 2) {
+      let nx = cx + OFF[q], ny = cy + OFF[q + 1], shx = 0, shy = 0;
+      if (nx >= gw) { nx -= gw; shx = Wd; } else if (nx < 0) { nx += gw; shx = -Wd; }
+      if (ny >= gh) { ny -= gh; shy = Hd; }
+      const bc = ny * gw + nx;
+      pairCells(as, ae, cellStart[bc], cellStart[bc + 1], shx, shy, false);
+    }
+  }
+  const fr = Math.pow(0.5, dt / S.halfLife), kf = rM * S.force * dt;
+  for (let i = 0; i < N; i++) { pvx[i] = pvx[i] * fr + fxs[i] * kf; pvy[i] = pvy[i] * fr + fys[i] * kf; }
+  const hw = Wd / 2, hh = Hd / 2;
+  // finger stirring: drag nearby particles along with the finger
+  if (stir.size) {
+    const R = rM * 1.3, R2 = R * R;
+    for (const s of stir.values()) {
+      const svx = s.vx, svy = s.vy;
+      for (let i = 0; i < N; i++) {
+        let dx = px[i] - s.x, dy = py[i] - s.y;
+        if (dx > hw) dx -= Wd; else if (dx < -hw) dx += Wd;
+        if (dy > hh) dy -= Hd; else if (dy < -hh) dy += Hd;
+        const d2 = dx * dx + dy * dy; if (d2 > R2) continue;
+        const w = 1 - Math.sqrt(d2) / R, a = 0.6 * w;
+        pvx[i] += (svx - pvx[i]) * a; pvy[i] += (svy - pvy[i]) * a;
+      }
+      if (performance.now() - s.t > 60) { s.vx *= 0.8; s.vy *= 0.8; }   // finger stopped: fade the push
+    }
+  }
+  for (let i = 0; i < N; i++) {
+    let x = px[i] + pvx[i] * dt, y = py[i] + pvy[i] * dt;
+    if (x < 0 || x >= Wd) { x %= Wd; if (x < 0) x += Wd; if (x >= Wd) x = 0; }
+    if (y < 0 || y >= Hd) { y %= Hd; if (y < 0) y += Hd; if (y >= Hd) y = 0; }
+    if (x !== x || y !== y) { x = Math.random() * Wd; y = Math.random() * Hd; pvx[i] = pvy[i] = 0; }   // NaN guard
+    px[i] = x; py[i] = y;
+  }
+}
+
+// ---------- render ----------
+function resize() {
+  const nw = window.innerWidth, nh = window.innerHeight;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = Math.round(nw * dpr); cv.height = Math.round(nh * dpr);
+  if (W > 1 && (nw !== vw || nh !== vh)) {   // rescale world to new aspect
+    const sxr = nw / W, syr = nh / H;
+    for (let i = 0; i < n; i++) { px[i] *= sxr; py[i] *= syr; if (px[i] >= nw) px[i] = 0; if (py[i] >= nh) py[i] = 0; }
+  }
+  vw = nw; vh = nh; W = nw; H = nh;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+  drawMatrix();
+}
+function render() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  if (S.trails) { ctx.globalAlpha = 0.22; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height); ctx.globalAlpha = 1; }
+  else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height); }
+  const z = cam.z, sc = z * dpr, cx = cam.x, cy = cam.y, Wd = W, Hd = H;
+  const visW = Wd / z, visH = Hd / z;
+  const s = S.size * Math.pow(z, 0.6) * dpr, hs = s / 2;
+  const t = S.types;
+  if (S.glow) {
+    ctx.globalCompositeOperation = 'lighter';
+    const g = s * 5, hg = g / 2;
+    for (let i = 0; i < n; i++) {
+      let x = px[i] - cx, y = py[i] - cy;
+      if (x < 0) x += Wd; if (y < 0) y += Hd;
+      if (x > visW || y > visH) continue;
+      ctx.drawImage(sprites[pt[i]], x * sc - hg, y * sc - hg, g, g);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  } else {
+    for (let k = 0; k < t; k++) {
+      ctx.fillStyle = colors[k];
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        if (pt[i] !== k) continue;
+        let x = px[i] - cx, y = py[i] - cy;
+        if (x < 0) x += Wd; if (y < 0) y += Hd;
+        if (x > visW || y > visH) continue;
+        ctx.rect(x * sc - hs, y * sc - hs, s, s);
+      }
+      ctx.fill();
+    }
+  }
+  if (stir.size) {   // faint ring under each stirring finger
+    ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.lineWidth = 1.5 * dpr;
+    for (const f of fingers.values()) if (f.mode === 'stir') {
+      ctx.beginPath(); ctx.arc(f.sx * dpr, f.sy * dpr, rMaxPx() * 1.3 * z * dpr, 0, 6.2832); ctx.stroke();
+    }
+  }
+}
+
+// ---------- loop / perf ----------
+const statsEl = document.getElementById('stats');
+let last = performance.now(), acc = 0, frames = 0, fpsT = last, fps = 60, stepMs = 0, renderMs = 0, lowSince = 0;
+const fpsLog = [];
+function loop(now) {
+  requestAnimationFrame(loop);
+  let el = (now - last) / 1000; last = now;
+  if (el > 0.1) el = 0.1;
+  if (!S.paused) {
+    acc += el * S.speed;
+    let steps = 0;
+    const t0 = performance.now();
+    // if physics is expensive, never run more than one step per frame: the sim slows a little
+    // instead of the frame rate collapsing (catch-up steps make slow frames even slower)
+    const maxSteps = stepMs > 5 ? 1 : 3;
+    while (acc >= DT && steps < maxSteps) { step(DT); acc -= DT; steps++; }
+    if (acc >= DT) acc = 0;
+    if (steps) stepMs = stepMs * 0.9 + (performance.now() - t0) / steps * 0.1;
+  }
+  const r0 = performance.now();
+  render();
+  renderMs = renderMs * 0.9 + (performance.now() - r0) * 0.1;
+  frames++;
+  if (now - fpsT >= 500) {
+    fps = frames * 1000 / (now - fpsT); frames = 0; fpsT = now;
+    fpsLog.push(fps); if (fpsLog.length > 120) fpsLog.shift();
+    if (S.showStats) statsEl.textContent = `${fps.toFixed(0)} fps  ${n} pts  ${stepMs.toFixed(1)} ms${S.paused ? '  paused' : ''}${presetName ? '\n' + presetName : ''}`;
+    autoPerf(now);
+  }
+}
+function autoPerf(now) {
+  if (!S.autoPerf || S.paused || document.hidden || n <= 400) { lowSince = 0; return; }
+  if (fps < 42) {
+    if (!lowSince) lowSince = now;
+    else if (now - lowSince > 2500) {
+      const c = Math.max(400, Math.round(n * 0.8 / 100) * 100);
+      setCount(c); syncUI(); saveHash(); lowSince = 0;
+      toast(`Lowered to ${c} particles to keep it smooth (Auto-perf)`);
+    }
+  } else lowSince = 0;
+}
+
+// ---------- UI helpers ----------
+const $ = id => document.getElementById(id);
+const toastEl = $('toast'); let toastT = 0;
+function toast(msg, ms = 1600) { toastEl.textContent = msg; toastEl.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('on'), ms); }
+const panel = $('panel');
+function setPanel(open) { panel.classList.toggle('open', open); panel.setAttribute('aria-hidden', !open); if (open) drawMatrix(); }
+const panelOpen = () => panel.classList.contains('open');
+
+function newRules() { randomMatrix(); syncUI(); saveHash(); toast('New rules'); }
+
+// ---------- touch gestures on canvas ----------
+const fingers = new Map();   // id -> {sx,sy,x0,y0,t0,mode,lx,ly,lt}
+let gesture = null;          // {type:'pinch'|'two', ...}
+let longT = 0, maxTouches = 0, twoStart = 0, twoMoved = false;
+function toWorld(sx, sy) { let x = cam.x + sx / cam.z, y = cam.y + sy / cam.z; x = ((x % W) + W) % W; y = ((y % H) + H) % H; return [x, y]; }
+function onDown(id, x, y) {
+  fingers.set(id, { sx: x, sy: y, x0: x, y0: y, t0: performance.now(), mode: 'pending', lt: performance.now() });
+  maxTouches = Math.max(maxTouches, fingers.size);
+  clearTimeout(longT);
+  if (fingers.size === 1) {
+    longT = setTimeout(() => {
+      const f = fingers.get(id);
+      if (f && f.mode === 'pending' && fingers.size === 1) { f.mode = 'done'; setPanel(!panelOpen()); if (navigator.vibrate) navigator.vibrate(15); }
+    }, 500);
+  } else if (fingers.size === 2) {
+    for (const f of fingers.values()) { if (f.mode === 'stir') stir.delete(f.id); f.mode = 'pinch'; }
+    twoStart = performance.now(); twoMoved = false;
+    const [a, b] = [...fingers.values()];
+    gesture = { d0: Math.hypot(a.sx - b.sx, a.sy - b.sy) || 1, z0: cam.z, mx: (a.sx + b.sx) / 2, my: (a.sy + b.sy) / 2, cx0: cam.x, cy0: cam.y };
+  }
+}
+function onMove(id, x, y) {
+  const f = fingers.get(id); if (!f) return;
+  const now = performance.now();
+  if (f.mode === 'pending' && Math.hypot(x - f.x0, y - f.y0) > 10) { f.mode = 'stir'; f.id = id; clearTimeout(longT); }
+  if (f.mode === 'stir') {
+    const dt = Math.max(8, now - f.lt) / 1000;
+    const [wx, wy] = toWorld(x, y);
+    const s = stir.get(id) || { x: wx, y: wy, vx: 0, vy: 0 };
+    const vx = (x - f.sx) / cam.z / dt, vy = (y - f.sy) / cam.z / dt;
+    s.vx = s.vx * 0.5 + vx * 0.5; s.vy = s.vy * 0.5 + vy * 0.5; s.x = wx; s.y = wy; s.t = now;
+    stir.set(id, s);
+  }
+  f.sx = x; f.sy = y; f.lt = now;
+  if (gesture && fingers.size >= 2) {
+    const [a, b] = [...fingers.values()];
+    const d = Math.hypot(a.sx - b.sx, a.sy - b.sy) || 1, mx = (a.sx + b.sx) / 2, my = (a.sy + b.sy) / 2;
+    if (Math.abs(d - gesture.d0) > 12 || Math.hypot(mx - gesture.mx, my - gesture.my) > 12) twoMoved = true;
+    if (twoMoved) {
+      const z = Math.max(1, Math.min(8, gesture.z0 * d / gesture.d0));
+      // world point under the initial midpoint stays under the current midpoint
+      const wx = gesture.cx0 + gesture.mx / gesture.z0, wy = gesture.cy0 + gesture.my / gesture.z0;
+      cam.z = z; cam.x = (((wx - mx / z) % W) + W) % W; cam.y = (((wy - my / z) % H) + H) % H;
+    }
+  }
+}
+function onUp(id) {
+  const f = fingers.get(id); if (!f) return;
+  fingers.delete(id); stir.delete(id);
+  const now = performance.now();
+  if (fingers.size === 0) {
+    clearTimeout(longT);
+    if (maxTouches === 1 && f.mode === 'pending' && now - f.t0 < 400) {
+      if (panelOpen()) setPanel(false); else newRules();
+    } else if (maxTouches === 2 && !twoMoved && now - twoStart < 450) {
+      setPanel(!panelOpen());
+    }
+    maxTouches = 0; gesture = null;
+  } else if (fingers.size === 1) {
+    for (const g of fingers.values()) g.mode = 'done';   // leftover finger after pinch does nothing
+  }
+}
+cv.addEventListener('touchstart', e => { e.preventDefault(); for (const t of e.changedTouches) onDown(t.identifier, t.clientX, t.clientY); }, { passive: false });
+cv.addEventListener('touchmove', e => { e.preventDefault(); for (const t of e.changedTouches) onMove(t.identifier, t.clientX, t.clientY); }, { passive: false });
+cv.addEventListener('touchend', e => { e.preventDefault(); for (const t of e.changedTouches) onUp(t.identifier); }, { passive: false });
+cv.addEventListener('touchcancel', e => { for (const t of e.changedTouches) { fingers.delete(t.identifier); stir.delete(t.identifier); } maxTouches = 0; gesture = null; clearTimeout(longT); });
+// mouse (desktop): click = new rules, drag = stir, right-click/long-press = panel, wheel = zoom
+let mouseDown = false;
+cv.addEventListener('mousedown', e => { if (e.button !== 0) return; mouseDown = true; onDown('m', e.clientX, e.clientY); });
+window.addEventListener('mousemove', e => { if (mouseDown) onMove('m', e.clientX, e.clientY); });
+window.addEventListener('mouseup', e => { if (mouseDown) { mouseDown = false; onUp('m'); } });
+cv.addEventListener('contextmenu', e => { e.preventDefault(); setPanel(!panelOpen()); });
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  const z = Math.max(1, Math.min(8, cam.z * Math.exp(-e.deltaY * 0.0015)));
+  const wx = cam.x + e.clientX / cam.z, wy = cam.y + e.clientY / cam.z;
+  cam.z = z; cam.x = (((wx - e.clientX / z) % W) + W) % W; cam.y = (((wy - e.clientY / z) % H) + H) % H;
+}, { passive: false });
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === ' ') { S.paused = !S.paused; syncUI(); }
+  else if (e.key === 'r') newRules();
+  else if (e.key === 's' || e.key === 'Escape') setPanel(e.key === 's' ? !panelOpen() : false);
+});
+document.addEventListener('gesturestart', e => e.preventDefault());
+document.addEventListener('dblclick', e => e.preventDefault());
+
+// ---------- panel controls ----------
+$('gear').addEventListener('click', () => setPanel(!panelOpen()));
+$('bClose').addEventListener('click', () => setPanel(false));
+$('bPause').addEventListener('click', () => { S.paused = !S.paused; syncUI(); });
+$('bRand').addEventListener('click', newRules);
+$('bReset').addEventListener('click', () => { resetPositions(); toast('Positions reset'); });
+$('bMutate').addEventListener('click', () => { const t = S.types; for (let i = 0; i < t; i++) for (let j = 0; j < t; j++) M[i * MAXT + j] = Math.max(-1, Math.min(1, M[i * MAXT + j] + (Math.random() - 0.5) * 0.4)); presetName = ''; syncUI(); saveHash(); });
+$('bSym').addEventListener('click', () => { const t = S.types; for (let i = 0; i < t; i++) for (let j = i + 1; j < t; j++) { const v = (M[i * MAXT + j] + M[j * MAXT + i]) / 2; M[i * MAXT + j] = M[j * MAXT + i] = v; } presetName = ''; syncUI(); saveHash(); });
+$('bZero').addEventListener('click', () => { M.fill(0); presetName = ''; syncUI(); saveHash(); });
+$('bView').addEventListener('click', () => { cam.x = cam.y = 0; cam.z = 1; });
+$('bShare').addEventListener('click', async () => {
+  clearTimeout(hashTimer); saveHash(); await new Promise(r => setTimeout(r, 300));
+  const url = location.href;
+  try {
+    if (navigator.share) { await navigator.share({ title: 'Particle Life', url }); return; }
+    await navigator.clipboard.writeText(url); toast('Link copied');
+  } catch (e) { if (e && e.name !== 'AbortError') toast('Copy the address bar to share'); }
+});
+const toggles = { tTrails: 'trails', tGlow: 'glow', tAuto: 'autoPerf', tStats: 'showStats' };
+for (const [id, k] of Object.entries(toggles)) $(id).addEventListener('click', () => { S[k] = !S[k]; if (k === 'showStats' && !S.showStats) statsEl.textContent = ''; syncUI(); });
+const presetsEl = $('presets');
+PRESETS.forEach((P, k) => { const b = document.createElement('button'); b.className = 'btn chip'; b.textContent = P.name; b.addEventListener('click', () => applyPreset(k)); presetsEl.appendChild(b); });
+
+// sliders. Friction slider is 0..1 mapped log onto half-life 0.4s .. 0.01s
+const fricToHL = v => 0.4 * Math.pow(0.025, v), hlToFric = h => Math.log(h / 0.4) / Math.log(0.025);
+const sliders = [
+  ['sCount', 'oCount', () => S.count, v => { setCount(v); }, v => v],
+  ['sTypes', 'oTypes', () => S.types, v => { setTypes(v); buildColors(); presetName = ''; drawMatrix(); }, v => v],
+  ['sRad', 'oRad', () => S.rMaxRel, v => { S.rMaxRel = v; }, v => Math.round(rMaxPx()) + 'px'],
+  ['sFric', 'oFric', () => hlToFric(S.halfLife), v => { S.halfLife = fricToHL(v); }, v => (v * 100).toFixed(0) + '%'],
+  ['sForce', 'oForce', () => S.force, v => { S.force = v; }, v => (+v).toFixed(1)],
+  ['sBeta', 'oBeta', () => S.beta, v => { S.beta = v; }, v => (+v).toFixed(2)],
+  ['sSize', 'oSize', () => S.size, v => { S.size = v; }, v => (+v).toFixed(1)],
+  ['sSpeed', 'oSpeed', () => S.speed, v => { S.speed = v; }, v => (+v) + '×'],
+];
+for (const [id, oid, get, set, fmt] of sliders) {
+  $(id).addEventListener('input', e => { const v = parseFloat(e.target.value); set(v); $(oid).textContent = fmt(v); saveHash(); });
+}
+function syncUI() {
+  for (const [id, oid, get, , fmt] of sliders) { const v = get(); $(id).value = v; $(oid).textContent = fmt(v); }
+  for (const [id, k] of Object.entries(toggles)) $(id).classList.toggle('on', !!S[k]);
+  $('bPause').innerHTML = S.paused ? '&#9654; Play' : '&#9208; Pause';
+  $('bPause').classList.toggle('on', S.paused);
+  presetsEl.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.textContent === presetName));
+  drawMatrix();
+}
+
+// ---------- matrix view ----------
+const mc = $('matrix'), mctx = mc.getContext('2d');
+let mCell = 0, mPad = 0;
+function drawMatrix() {
+  const t = S.types, avail = Math.min(230, (window.innerWidth || 360) * 0.56);
+  mCell = Math.floor(avail / (t + 1)); mPad = mCell; const size = mCell * (t + 1);
+  const d = Math.min(window.devicePixelRatio || 1, 2);
+  if (mc.width !== size * d) { mc.width = mc.height = size * d; mc.style.width = mc.style.height = size + 'px'; }
+  mctx.setTransform(d, 0, 0, d, 0, 0);
+  mctx.clearRect(0, 0, size, size);
+  const r = mCell * 0.3;
+  for (let i = 0; i < t; i++) {
+    mctx.fillStyle = colors[i];
+    mctx.beginPath(); mctx.arc(mCell / 2, mPad + i * mCell + mCell / 2, r, 0, 6.2832); mctx.fill();
+    mctx.beginPath(); mctx.arc(mPad + i * mCell + mCell / 2, mCell / 2, r, 0, 6.2832); mctx.fill();
+  }
+  mctx.font = `${Math.max(8, mCell * 0.32) | 0}px system-ui,sans-serif`; mctx.textAlign = 'center'; mctx.textBaseline = 'middle';
+  for (let i = 0; i < t; i++) for (let j = 0; j < t; j++) {
+    const v = M[i * MAXT + j], a = Math.abs(v);
+    mctx.fillStyle = v >= 0 ? `rgb(${30 + 20 * a | 0},${40 + 200 * a | 0},${40 + 40 * a | 0})` : `rgb(${40 + 210 * a | 0},${30 + 30 * a | 0},${40 + 30 * a | 0})`;
+    mctx.fillRect(mPad + j * mCell + 1, mPad + i * mCell + 1, mCell - 2, mCell - 2);
+    if (mCell >= 20) { mctx.fillStyle = 'rgba(255,255,255,.75)'; mctx.fillText(v.toFixed(1).replace('-0.0', '0.0'), mPad + j * mCell + mCell / 2, mPad + i * mCell + mCell / 2 + 1); }
+  }
+}
+mc.addEventListener('click', e => {
+  const r = mc.getBoundingClientRect(), x = e.clientX - r.left - mPad, y = e.clientY - r.top - mPad;
+  const j = Math.floor(x / mCell), i = Math.floor(y / mCell);
+  if (i < 0 || j < 0 || i >= S.types || j >= S.types) return;
+  const k = i * MAXT + j; let v = Math.round(M[k] * 2) / 2 + 0.5; if (v > 1.001) v = -1;
+  M[k] = v; presetName = ''; syncUI(); saveHash();
+  toast(`row ${i + 1} → col ${j + 1}: ${v > 0 ? 'attract' : v < 0 ? 'repel' : 'ignore'} ${v.toFixed(1)}`, 1000);
+});
+
+// ---------- boot ----------
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 200));
+document.addEventListener('visibilitychange', () => { last = performance.now(); lowSince = 0; });
+W = window.innerWidth; H = window.innerHeight;
+const fromHash = loadHash();
+buildColors();
+alloc(Math.max(S.count, 256)); n = 0; setCount(S.count); resetPositions();
+if (!fromHash) applyPreset(Math.random() * 3 | 0, true);   // Cells / Bugs / Critters
+resize(); syncUI(); saveHash();
+if (!fromHash) toast('Tap: new rules · Drag: stir · Pinch: zoom · Hold or ⚙: settings', 4500);
+else toast(presetName ? `Shared rules: ${presetName}` : 'Shared rules loaded', 2000);
+requestAnimationFrame(t => { last = t; fpsT = t; requestAnimationFrame(loop); });
+
+// test hook
+window.__pl = {
+  S, M, cam, get n() { return n; }, get fps() { return fps; }, get stepMs() { return stepMs; }, get renderMs() { return renderMs; }, fpsLog,
+  get panelOpen() { return panelOpen(); }, get rMax() { return rMaxPx(); }, presets: PRESETS.map(p => p.name),
+  setCount: c => { setCount(c); syncUI(); }, applyPreset: k => applyPreset(k, true), resetPositions,
+  pos: i => [px[i], py[i], pvx[i], pvy[i], pt[i]],
+  meanSpeed() { let s = 0; for (let i = 0; i < n; i++) s += Math.hypot(pvx[i], pvy[i]); return s / n; },
+};
+})();
+</script>
+</body>
+</html>
